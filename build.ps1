@@ -6,5 +6,5 @@ python -m pip install -r requirements.txt
 $taskBuildRoot = Join-Path $env:LOCALAPPDATA 'TareitasBuild'
 $taskDistRoot = Join-Path $taskBuildRoot 'dist'
 New-Item -ItemType Directory -Force -Path $taskBuildRoot | Out-Null
-python -m PyInstaller --noconfirm --clean --onefile --windowed --name "TareasRecurrentes" --workpath "$taskBuildRoot\work" --specpath "$taskBuildRoot\spec" --distpath "$taskDistRoot" main.py
-Write-Host "Listo: $taskDistRoot\TareasRecurrentes.exe"
+python -m PyInstaller --noconfirm --clean --onedir --windowed --name "TareasRecurrentes" --workpath "$taskBuildRoot\work" --specpath "$taskBuildRoot\spec" --distpath "$taskDistRoot" main.py
+Write-Host "Listo: $taskDistRoot\TareasRecurrentes\TareasRecurrentes.exe"
