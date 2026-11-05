@@ -7,12 +7,12 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from PySide6.QtCore import QDate, QTime, Qt, QTimer
+from PySide6.QtCore import QDate, QSettings, QTime, Qt, QTimer
 from PySide6.QtGui import QAction, QIcon
 from PySide6.QtWidgets import (
     QApplication, QCalendarWidget, QCheckBox, QComboBox, QDateEdit, QDialog, QDialogButtonBox,
     QFormLayout, QFrame, QHBoxLayout, QLabel, QLineEdit, QMainWindow,
-    QMessageBox, QPushButton, QMenu, QPlainTextEdit, QScrollArea, QSpinBox, QStackedWidget, QSystemTrayIcon, QTimeEdit,
+    QMessageBox, QPushButton, QMenu, QPlainTextEdit, QProgressBar, QScrollArea, QSpinBox, QStackedWidget, QSystemTrayIcon, QTimeEdit,
     QVBoxLayout, QWidget,
 )
 
@@ -20,6 +20,14 @@ APP_NAME = "Tareas Recurrentes"
 WEEKDAYS = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"]
 CATEGORIES = ["General", "Idea", "Comida", "Trabajo", "Deporte", "Música"]
 CATEGORY_ICONS = {"General": "✓", "Idea": "💡", "Comida": "☕", "Trabajo": "▣", "Deporte": "⚽", "Música": "♫"}
+THEMES = {
+    "Violeta / Lavanda": ("#9e62e6", "#f0e2fa", "#7548a9", "#e9d9f8"),
+    "Celeste": ("#4aabd4", "#dff4fb", "#287b9d", "#d7f0fa"),
+    "León": ("#9b1b30", "#f5dfb3", "#7b1828", "#f5e2bd"),
+    "Serpiente": ("#087a52", "#e3e8e5", "#525d5a", "#d8e2dd"),
+    "Cuervo": ("#0b4f8a", "#e7d5c0", "#7a4d29", "#d9e7f3"),
+    "Tejón": ("#151515", "#f4d06a", "#8a6508", "#f5e7b4"),
+}
 
 
 def app_data_dir() -> Path:
@@ -200,13 +208,64 @@ class CategoryDialog(QDialog):
         self.selected_category = category; self.accept()
 
 
+class PomodoroDialog(QDialog):
+    """Temporizador local configurable, asociado opcionalmente a una tarea."""
+    def __init__(self, db, parent=None):
+        super().__init__(parent); self.db = db; self.setWindowTitle("Pomodoro"); self.setMinimumWidth(390)
+        self.timer = QTimer(self); self.timer.timeout.connect(self.tick); self.remaining = 0; self.cycle = 1; self.breaking = False
+        layout = QVBoxLayout(self); layout.setSpacing(12)
+        title = QLabel("Pomodoro"); title.setStyleSheet("font-size:27px;font-weight:800;"); layout.addWidget(title)
+        layout.addWidget(QLabel("Tarea guardada (opcional)")); self.task = QComboBox(); self.task.addItem("Sin tarea asociada", "")
+        for task in db.conn.execute("SELECT id,title FROM tasks WHERE active=1 ORDER BY title COLLATE NOCASE"):
+            self.task.addItem(task["title"], task["title"])
+        layout.addWidget(self.task)
+        self.custom_title = QLineEdit(); self.custom_title.setPlaceholderText("O escribe un nombre"); layout.addWidget(self.custom_title)
+        settings = QFormLayout(); self.work = QSpinBox(); self.work.setRange(1, 180); self.work.setValue(25); self.work.setSuffix(" min")
+        self.rest = QSpinBox(); self.rest.setRange(1, 90); self.rest.setValue(5); self.rest.setSuffix(" min")
+        self.cycles = QSpinBox(); self.cycles.setRange(1, 12); self.cycles.setValue(4)
+        settings.addRow("Trabajo:", self.work); settings.addRow("Descanso:", self.rest); settings.addRow("Ciclos:", self.cycles); layout.addLayout(settings)
+        self.label = QLabel("Listo para comenzar"); self.label.setAlignment(Qt.AlignCenter); self.label.setStyleSheet("font-size:22px;font-weight:800;"); layout.addWidget(self.label)
+        self.progress = QProgressBar(); self.progress.setTextVisible(False); layout.addWidget(self.progress)
+        self.start_button = QPushButton("Iniciar Pomodoro"); self.start_button.setObjectName("primaryButton"); self.start_button.clicked.connect(self.start); layout.addWidget(self.start_button)
+        close = QPushButton("Cerrar"); close.clicked.connect(self.reject); layout.addWidget(close)
+
+    def session_name(self):
+        return self.custom_title.text().strip() or self.task.currentData() or f"Ciclo Pomodoro {self.cycle}"
+
+    def start(self):
+        self.cycle = 1; self.breaking = False; self.begin_phase()
+
+    def begin_phase(self):
+        minutes = self.rest.value() if self.breaking else self.work.value(); self.remaining = minutes * 60
+        self.progress.setRange(0, self.remaining); self.progress.setValue(self.remaining)
+        phase = "Descanso" if self.breaking else self.session_name()
+        self.label.setText(f"{phase} · ciclo {self.cycle}/{self.cycles.value()}"); self.start_button.setText("En curso…")
+        self.timer.start(1000)
+
+    def tick(self):
+        self.remaining -= 1; self.progress.setValue(max(0, self.remaining))
+        mins, secs = divmod(max(0, self.remaining), 60); self.start_button.setText(f"{mins:02d}:{secs:02d}")
+        if self.remaining > 0: return
+        self.timer.stop()
+        if not self.breaking:
+            self.parent().notify("Pomodoro", f"Terminaste: {self.session_name()}.")
+            if self.cycle >= self.cycles.value(): self.label.setText("¡Pomodoro completado!"); self.start_button.setText("Iniciar nuevamente"); return
+            self.breaking = True; self.begin_phase(); return
+        self.breaking = False; self.cycle += 1; self.parent().notify("Pomodoro", "Descanso terminado. Comienza el siguiente ciclo."); self.begin_phase()
+
+    def reject(self):
+        self.timer.stop(); super().reject()
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.db = Database(); self.current_day = date.today()
+        self.db = Database(); self.current_day = date.today(); self.settings = QSettings("Tareitas", "Tareitas")
+        self.theme_name = self.settings.value("theme", "Violeta / Lavanda"); self.dark_mode = self.settings.value("dark", False, type=bool)
+        self.notification_minutes = self.settings.value("notification_minutes", 120, type=int)
         self.setWindowTitle(APP_NAME); self.resize(540, 840); self.setMinimumSize(500, 760)
-        self.build_ui(); self.setup_tray(); self.refresh()
-        self.timer = QTimer(self); self.timer.timeout.connect(self.check_pending); self.timer.start(30 * 60 * 1000)
+        self.build_ui(); self.setup_tray(); self.apply_theme(); self.refresh()
+        self.timer = QTimer(self); self.timer.timeout.connect(self.check_pending); self.schedule_notifications()
 
     def build_ui(self):
         self.pages = QStackedWidget(); self.setCentralWidget(self.pages)
@@ -249,15 +308,15 @@ class MainWindow(QMainWindow):
 
     def build_home_page(self):
         page = QWidget(); page.setObjectName("home"); outer = QVBoxLayout(page); outer.setContentsMargins(0, 0, 0, 0); outer.setSpacing(0)
-        header = QFrame(); header.setStyleSheet("background:#9e62e6;"); header.setFixedHeight(230); head = QVBoxLayout(header); head.setContentsMargins(32, 24, 32, 22)
-        top = QHBoxLayout(); menu = QLabel("▦"); menu.setStyleSheet("color:white;font-size:25px;"); self.day_label = QLabel(); self.day_label.setObjectName("date"); clock = QPushButton("◴"); clock.setObjectName("headerIcon"); clock.clicked.connect(self.show_history); top.addWidget(menu); top.addStretch(); top.addWidget(self.day_label); top.addStretch(); top.addWidget(clock); head.addLayout(top); head.addStretch()
+        header = QFrame(); header.setObjectName("hero"); header.setFixedHeight(230); head = QVBoxLayout(header); head.setContentsMargins(32, 24, 32, 22)
+        top = QHBoxLayout(); menu = QPushButton("🎨"); menu.setObjectName("headerIcon"); menu.setToolTip("Apariencia y avisos"); menu.clicked.connect(self.show_appearance_menu); self.day_label = QLabel(); self.day_label.setObjectName("date"); clock = QPushButton("◴"); clock.setObjectName("headerIcon"); clock.clicked.connect(self.show_history); top.addWidget(menu); top.addStretch(); top.addWidget(self.day_label); top.addStretch(); top.addWidget(clock); head.addLayout(top); head.addStretch()
         row = QHBoxLayout(); words = QVBoxLayout(); title = QLabel("Hoy"); title.setObjectName("heading"); self.subtitle = QLabel(); self.subtitle.setObjectName("subheading"); words.addWidget(title); words.addWidget(self.subtitle); row.addLayout(words); row.addStretch(); add = QPushButton("Agregar tarea"); add.setObjectName("addWhite"); add.clicked.connect(self.add_task); row.addWidget(add); head.addLayout(row); outer.addWidget(header)
         content = QFrame(); content.setObjectName("content"); content.setStyleSheet("QFrame#content { background:#ffffff; border-top-left-radius:26px; border-top-right-radius:26px; }"); layout = QVBoxLayout(content); layout.setContentsMargins(30, 20, 30, 18); layout.setSpacing(16)
         self.quick_days = QHBoxLayout(); self.quick_days.setSpacing(12); layout.addLayout(self.quick_days)
         label = QLabel("Mis tareas"); label.setStyleSheet("font-size:24px; font-weight:800; color:#1f1a24;"); layout.addWidget(label)
         self.summary = QLabel(); self.summary.setObjectName("summary"); layout.addWidget(self.summary)
         self.scroll = QScrollArea(); self.scroll.setWidgetResizable(True); self.scroll.setFrameShape(QFrame.NoFrame); self.list_widget = QWidget(); self.list_layout = QVBoxLayout(self.list_widget); self.list_layout.setAlignment(Qt.AlignTop); self.list_layout.setSpacing(10); self.scroll.setWidget(self.list_widget); layout.addWidget(self.scroll)
-        bottom = QHBoxLayout(); calendar = QPushButton("Calendario"); calendar.setObjectName("secondaryButton"); calendar.clicked.connect(lambda: self.pages.setCurrentIndex(3)); bottom.addWidget(calendar); bottom.addStretch(); history = QPushButton("Historial"); history.setObjectName("secondaryButton"); history.clicked.connect(self.show_history); bottom.addWidget(history); layout.addLayout(bottom); outer.addWidget(content); return page
+        bottom = QHBoxLayout(); calendar = QPushButton("Calendario"); calendar.setObjectName("secondaryButton"); calendar.clicked.connect(lambda: self.pages.setCurrentIndex(3)); bottom.addWidget(calendar); pomodoro = QPushButton("Pomodoro"); pomodoro.setObjectName("secondaryButton"); pomodoro.clicked.connect(self.open_pomodoro); bottom.addWidget(pomodoro); bottom.addStretch(); history = QPushButton("Historial"); history.setObjectName("secondaryButton"); history.clicked.connect(self.show_history); bottom.addWidget(history); layout.addLayout(bottom); outer.addWidget(content); return page
 
     def build_categories_page(self):
         page = QWidget(); layout = QVBoxLayout(page); layout.setContentsMargins(30, 28, 30, 25); layout.setSpacing(14)
@@ -382,10 +441,55 @@ class MainWindow(QMainWindow):
         quit_action = QAction("Salir", self); quit_action.triggered.connect(QApplication.quit); menu.addAction(quit_action)
         self.tray.setContextMenu(menu); self.tray.show()
 
+    def apply_theme(self):
+        accent, soft, muted, page = THEMES.get(self.theme_name, THEMES["Violeta / Lavanda"])
+        surface, ink = ("#202028", "#f4f0f7") if self.dark_mode else ("#ffffff", "#1f1a24")
+        self.setStyleSheet(self.styleSheet() + f"""
+          QMainWindow {{ background:{page}; color:{ink}; }} QFrame#hero {{ background:{accent}; }}
+          QFrame#content, QScrollArea, QScrollArea > QWidget > QWidget, QDialog {{ background:{surface}; color:{ink}; }}
+          QLabel, QDialog QLabel, QCheckBox {{ color:{ink}; }} QLabel#summary {{ color:{muted}; background:{surface}; }}
+          QPushButton {{ color:{ink}; background:{soft}; }} QPushButton:hover {{ background:{page}; }}
+          QPushButton#primaryButton, QPushButton#todayButton {{ color:#fff; background:{accent}; }}
+          QPushButton#secondaryButton {{ color:{muted}; background:{surface}; }} QFrame#card {{ background:{soft}; border-color:{soft}; }}
+          QCheckBox::indicator {{ border-color:{accent}; background:{surface}; }} QCheckBox::indicator:checked {{ background:{accent}; border-color:{accent}; }}
+          QLineEdit, QDateEdit, QSpinBox, QTimeEdit, QComboBox, QPlainTextEdit {{ background:{surface}; color:{ink}; border-color:{soft}; }}
+        """)
+
+    def show_appearance_menu(self):
+        menu = QMenu(self)
+        themes = menu.addMenu("Paleta de colores")
+        for name in THEMES:
+            action = themes.addAction(name); action.setCheckable(True); action.setChecked(name == self.theme_name)
+            action.triggered.connect(lambda _, value=name: self.set_theme(value))
+        dark = menu.addAction("Modo oscuro"); dark.setCheckable(True); dark.setChecked(self.dark_mode); dark.triggered.connect(self.toggle_dark)
+        notices = menu.addMenu("Avisos de pendientes")
+        for minutes, text in ((60, "Cada 1 hora"), (120, "Cada 2 horas")):
+            action = notices.addAction(text); action.setCheckable(True); action.setChecked(minutes == self.notification_minutes)
+            action.triggered.connect(lambda _, value=minutes: self.set_notification_frequency(value))
+        menu.exec(self.sender().mapToGlobal(self.sender().rect().bottomLeft()))
+
+    def set_theme(self, name):
+        self.theme_name = name; self.settings.setValue("theme", name); self.apply_theme()
+
+    def toggle_dark(self, enabled):
+        self.dark_mode = enabled; self.settings.setValue("dark", enabled); self.apply_theme()
+
+    def set_notification_frequency(self, minutes):
+        self.notification_minutes = minutes; self.settings.setValue("notification_minutes", minutes); self.schedule_notifications()
+
+    def schedule_notifications(self):
+        self.timer.start(max(60, self.notification_minutes) * 60 * 1000)
+
+    def open_pomodoro(self):
+        PomodoroDialog(self.db, self).exec()
+
+    def notify(self, title, message):
+        if self.tray.isVisible(): self.tray.showMessage(title, message, QSystemTrayIcon.Information, 8000)
+
     def check_pending(self):
         if date.today() != self.current_day: self.go_today()
         pending = [t for t in self.db.tasks_for(date.today()) if not self.db.completed(t["id"], date.today())]
-        if pending and self.tray.isVisible(): self.tray.showMessage(APP_NAME, f"Tienes {len(pending)} tarea(s) pendiente(s) para hoy.", QSystemTrayIcon.Information, 8000)
+        if pending: self.notify(APP_NAME, f"Tienes {len(pending)} tarea(s) pendiente(s) para hoy.")
 
     def closeEvent(self, event):
         self.tray.hide()
