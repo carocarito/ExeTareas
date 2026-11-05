@@ -327,7 +327,7 @@ class MainWindow(QMainWindow):
         header = QFrame(); header.setObjectName("hero"); header.setFixedHeight(230); head = QVBoxLayout(header); head.setContentsMargins(32, 24, 32, 22)
         top = QHBoxLayout(); menu = QPushButton("🎨"); menu.setObjectName("headerIcon"); menu.setToolTip("Apariencia y avisos"); menu.clicked.connect(self.show_appearance_menu); self.day_label = QLabel(); self.day_label.setObjectName("date"); clock = QPushButton("◴"); clock.setObjectName("headerIcon"); clock.clicked.connect(self.show_history); top.addWidget(menu); top.addStretch(); top.addWidget(self.day_label); top.addStretch(); top.addWidget(clock); head.addLayout(top); head.addStretch()
         row = QHBoxLayout(); words = QVBoxLayout(); title = QLabel("Hoy"); title.setObjectName("heading"); self.subtitle = QLabel(); self.subtitle.setObjectName("subheading"); words.addWidget(title); words.addWidget(self.subtitle); row.addLayout(words); row.addStretch(); head.addLayout(row); outer.addWidget(header)
-        content = QFrame(); content.setObjectName("content"); content.setStyleSheet("QFrame#content { background:#ffffff; border-top-left-radius:26px; border-top-right-radius:26px; }"); layout = QVBoxLayout(content); layout.setContentsMargins(30, 20, 30, 18); layout.setSpacing(16)
+        content = QFrame(); content.setObjectName("content"); layout = QVBoxLayout(content); layout.setContentsMargins(30, 20, 30, 18); layout.setSpacing(16)
         self.quick_days = QHBoxLayout(); self.quick_days.setSpacing(12); layout.addLayout(self.quick_days)
         label = QLabel("Mis tareas"); label.setStyleSheet("font-size:24px; font-weight:800; color:#1f1a24;"); layout.addWidget(label)
         self.summary = QLabel(); self.summary.setObjectName("summary"); layout.addWidget(self.summary)
@@ -346,7 +346,7 @@ class MainWindow(QMainWindow):
         page = QWidget(); layout = QVBoxLayout(page); layout.setContentsMargins(30, 28, 30, 25); layout.setSpacing(11)
         top = QHBoxLayout(); back = QPushButton("‹"); back.setObjectName("navButton"); back.clicked.connect(lambda: self.pages.setCurrentIndex(1)); top.addWidget(back); top.addStretch(); self.form_title = QLabel("Crear tarea"); self.form_title.setStyleSheet("font-size:25px;font-weight:800;"); top.addWidget(self.form_title); top.addStretch(); layout.addLayout(top)
         self.form_calendar = QCalendarWidget(); self.form_calendar.setGridVisible(False); self.form_calendar.setVerticalHeaderFormat(QCalendarWidget.NoVerticalHeader); self.form_calendar.setFixedHeight(185); self.form_calendar.selectionChanged.connect(self.form_calendar_selected); layout.addWidget(self.form_calendar)
-        self.form_category = QLabel(); self.form_category.setStyleSheet("background:#f0e2fa;color:#7548a9;font-size:18px;font-weight:800;border-radius:12px;padding:15px;"); layout.addWidget(self.form_category)
+        self.form_category = QLabel(); self.form_category.setObjectName("formCategory"); layout.addWidget(self.form_category)
         self.form_name = QLineEdit(); self.form_name.setPlaceholderText("Nombre de la tarea"); layout.addWidget(self.form_name)
         self.form_description = QPlainTextEdit(); self.form_description.setPlaceholderText("Descripción (opcional)"); self.form_description.setFixedHeight(72); layout.addWidget(self.form_description)
         dates = QHBoxLayout(); self.form_start = QDateEdit(); self.form_start.setCalendarPopup(True); self.form_end = QDateEdit(); self.form_end.setCalendarPopup(True); self.form_has_end = QCheckBox("Fecha de término"); dates.addWidget(QLabel("Inicio")); dates.addWidget(self.form_start); dates.addWidget(self.form_has_end); dates.addWidget(self.form_end); layout.addLayout(dates); self.form_has_end.toggled.connect(self.form_end.setEnabled)
@@ -370,12 +370,12 @@ class MainWindow(QMainWindow):
         box.toggled.connect(lambda value, tid=task["id"]: self.complete(tid, value)); main.addWidget(box)
         caption = task["description"] or task["category"]
         caption_label = QLabel(f"{task['category']}  ·  {caption}" if task["description"] else caption)
-        caption_label.setStyleSheet("color:#7548a9; padding-left:27px;"); main.addWidget(caption_label); row.addLayout(main); row.addStretch()
+        caption_label.setObjectName("taskCaption"); main.addWidget(caption_label); row.addLayout(main); row.addStretch()
         detail = []
         if task["weekdays"]: detail.append(" · ".join(WEEKDAYS[int(x)] for x in task["weekdays"].split(",")))
         if task["interval_days"]: detail.append(f"cada {task['interval_days']} días")
-        hint = QLabel("  |  ".join(detail)); hint.setStyleSheet("color:#7548a9; font-weight:600;"); row.addWidget(hint)
-        edit = QPushButton("Editar"); edit.setObjectName("editButton"); edit.setStyleSheet("QPushButton { color:#ffffff; background:#9e62e6; } QPushButton:hover { background:#8447d2; }"); edit.clicked.connect(lambda: self.edit_task(task)); row.addWidget(edit)
+        hint = QLabel("  |  ".join(detail)); hint.setObjectName("taskHint"); row.addWidget(hint)
+        edit = QPushButton("Editar"); edit.setObjectName("editButton"); edit.clicked.connect(lambda: self.edit_task(task)); row.addWidget(edit)
         return card
 
     def refresh(self):
@@ -398,7 +398,7 @@ class MainWindow(QMainWindow):
         counts = self.db.category_counts()
         for category in CATEGORIES:
             button = QPushButton(f"{CATEGORY_ICONS[category]}    {category}\n       {counts.get(category, 0)} tareas")
-            button.setMinimumHeight(70); button.setStyleSheet("QPushButton { text-align:left; font-size:16px; color:#4d2779; background:#f0e2fa; border-radius:12px; padding:12px; } QPushButton:hover { background:#dfc3f5; }")
+            button.setMinimumHeight(70); button.setObjectName("categoryButton")
             button.clicked.connect(lambda _, value=category: self.open_form(value)); self.category_buttons.addWidget(button)
         self.day_label.setText(self.current_day.strftime("%d %b"))
         self.subtitle.setText(f"{len(tasks)} tarea(s) para hoy")
@@ -445,7 +445,7 @@ class MainWindow(QMainWindow):
         if entries:
             for entry in entries:
                 item = QLabel(f"✓  {date.fromisoformat(entry['day']).strftime('%d/%m/%Y')}   {entry['title']}")
-                item.setStyleSheet("padding:8px; background:#f6f8fb; border-radius:6px;"); rows.addWidget(item)
+                item.setObjectName("historyItem"); rows.addWidget(item)
         else:
             rows.addWidget(QLabel("Aún no hay tareas completadas."))
         scroll.setWidget(content); layout.addWidget(scroll)
@@ -462,14 +462,22 @@ class MainWindow(QMainWindow):
 
     def apply_theme(self):
         accent, soft, muted, page = THEMES.get(self.theme_name, THEMES["Violeta / Lavanda"])
-        surface, ink = ("#202028", "#f4f0f7") if self.dark_mode else ("#ffffff", "#1f1a24")
+        if self.dark_mode:
+            page, surface, soft, muted, ink = "#121218", "#202028", "#30293a", "#d5bae9", "#f4f0f7"
+        else:
+            surface, ink = "#ffffff", "#1f1a24"
         self.setStyleSheet(self.styleSheet() + f"""
-          QMainWindow {{ background:{page}; color:{ink}; }} QFrame#hero {{ background:{accent}; }}
-          QFrame#content, QScrollArea, QScrollArea > QWidget > QWidget, QDialog {{ background:{surface}; color:{ink}; }}
-          QLabel, QDialog QLabel, QCheckBox {{ color:{ink}; }} QLabel#summary {{ color:{muted}; background:{surface}; }}
-          QPushButton {{ color:{ink}; background:{soft}; }} QPushButton:hover {{ background:{page}; }}
+          QMainWindow, QStackedWidget, QWidget {{ background:{page}; color:{ink}; }} QFrame#hero {{ background:{accent}; }}
+          QFrame#content {{ background:{surface}; border-top-left-radius:26px; border-top-right-radius:26px; }}
+          QScrollArea, QScrollArea > QWidget > QWidget, QDialog {{ background:{surface}; color:{ink}; }}
+          QLabel, QDialog QLabel, QCheckBox {{ color:{ink}; }} QLabel#summary {{ color:{muted}; background:{soft}; }}
+          QPushButton {{ color:{ink}; background:{soft}; }} QPushButton:hover {{ background:{accent}; color:#ffffff; }}
           QPushButton#primaryButton, QPushButton#todayButton {{ color:#fff; background:{accent}; }}
           QPushButton#secondaryButton {{ color:{muted}; background:{surface}; }} QFrame#card {{ background:{soft}; border-color:{soft}; }}
+          QPushButton#categoryButton {{ text-align:left; font-size:16px; color:{ink}; background:{soft}; border-radius:12px; padding:12px; }}
+          QPushButton#categoryButton:hover {{ background:{accent}; color:#ffffff; }} QLabel#formCategory {{ background:{soft}; color:{muted}; font-size:18px; font-weight:800; border-radius:12px; padding:15px; }}
+          QLabel#taskCaption, QLabel#taskHint {{ color:{muted}; }} QPushButton#editButton {{ color:#ffffff; background:{accent}; }}
+          QLabel#historyItem {{ padding:8px; background:{soft}; color:{ink}; border-radius:6px; }}
           QCheckBox::indicator {{ border-color:{accent}; background:{surface}; }} QCheckBox::indicator:checked {{ background:{accent}; border-color:{accent}; }}
           QLineEdit, QDateEdit, QSpinBox, QTimeEdit, QComboBox, QPlainTextEdit {{ background:{surface}; color:{ink}; border-color:{soft}; }}
         """)
