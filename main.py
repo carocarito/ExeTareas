@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import sqlite3
 import sys
+import os
+import shutil
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -31,10 +33,16 @@ THEMES = {
 
 
 def app_data_dir() -> Path:
-    """Mantiene la base junto al .exe para que la aplicación sea portable."""
-    root = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).parent
+    """Guarda datos fuera del .exe único para no ensuciar su carpeta."""
+    root = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "Tareitas"
     folder = root / "data"
-    folder.mkdir(exist_ok=True)
+    folder.mkdir(parents=True, exist_ok=True)
+    # Conserva instalaciones creadas antes, que guardaban SQLite junto al .exe.
+    legacy_root = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).parent
+    legacy_db = legacy_root / "data" / "tareas.db"
+    target_db = folder / "tareas.db"
+    if not target_db.exists() and legacy_db.exists():
+        shutil.copy2(legacy_db, target_db)
     return folder
 
 
