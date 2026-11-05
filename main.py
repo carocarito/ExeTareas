@@ -52,6 +52,11 @@ class Database:
               task_id INTEGER NOT NULL, day TEXT NOT NULL, completed_at TEXT NOT NULL,
               PRIMARY KEY (task_id, day), FOREIGN KEY(task_id) REFERENCES tasks(id)
             );
+            CREATE TABLE IF NOT EXISTS pomodoro_sessions (
+              id INTEGER PRIMARY KEY, title TEXT NOT NULL, task_title TEXT NOT NULL DEFAULT '',
+              work_minutes INTEGER NOT NULL, break_minutes INTEGER NOT NULL, cycles INTEGER NOT NULL,
+              completed_at TEXT NOT NULL
+            );
         """)
         # Migración segura de las instalaciones creadas antes de estas funciones.
         columns = {row["name"] for row in self.conn.execute("PRAGMA table_info(tasks)")}
@@ -114,6 +119,13 @@ class Database:
 
     def category_counts(self):
         return dict(self.conn.execute("SELECT category, COUNT(*) FROM tasks WHERE active=1 GROUP BY category"))
+
+    def pomodoro_count_today(self) -> int:
+        return self.conn.execute("SELECT COUNT(*) FROM pomodoro_sessions WHERE date(completed_at)=?", (date.today().isoformat(),)).fetchone()[0]
+
+    def record_pomodoro(self, title: str, task_title: str, work: int, rest: int, cycles: int) -> None:
+        self.conn.execute("INSERT INTO pomodoro_sessions(title,task_title,work_minutes,break_minutes,cycles,completed_at) VALUES (?,?,?,?,?,?)", (title, task_title, work, rest, cycles, datetime.now().isoformat(timespec="seconds")))
+        self.conn.commit()
 
 
 class TaskDialog(QDialog):
@@ -212,7 +224,7 @@ class PomodoroDialog(QDialog):
     """Temporizador local configurable, asociado opcionalmente a una tarea."""
     def __init__(self, db, parent=None):
         super().__init__(parent); self.db = db; self.setWindowTitle("Pomodoro"); self.setMinimumWidth(390)
-        self.timer = QTimer(self); self.timer.timeout.connect(self.tick); self.remaining = 0; self.cycle = 1; self.breaking = False
+        self.timer = QTimer(self); self.timer.timeout.connect(self.tick); self.remaining = 0; self.cycle = 1; self.breaking = False; self.title_for_session = ""
         layout = QVBoxLayout(self); layout.setSpacing(12)
         title = QLabel("Pomodoro"); title.setStyleSheet("font-size:27px;font-weight:800;"); layout.addWidget(title)
         layout.addWidget(QLabel("Tarea guardada (opcional)")); self.task = QComboBox(); self.task.addItem("Sin tarea asociada", "")
@@ -230,10 +242,10 @@ class PomodoroDialog(QDialog):
         close = QPushButton("Cerrar"); close.clicked.connect(self.reject); layout.addWidget(close)
 
     def session_name(self):
-        return self.custom_title.text().strip() or self.task.currentData() or f"Ciclo Pomodoro {self.cycle}"
+        return self.title_for_session or self.custom_title.text().strip() or self.task.currentData() or f"Ciclo Pomodoro {self.db.pomodoro_count_today() + 1}"
 
     def start(self):
-        self.cycle = 1; self.breaking = False; self.begin_phase()
+        self.cycle = 1; self.breaking = False; self.title_for_session = self.custom_title.text().strip() or self.task.currentData() or f"Ciclo Pomodoro {self.db.pomodoro_count_today() + 1}"; self.begin_phase()
 
     def begin_phase(self):
         minutes = self.rest.value() if self.breaking else self.work.value(); self.remaining = minutes * 60
@@ -249,7 +261,9 @@ class PomodoroDialog(QDialog):
         self.timer.stop()
         if not self.breaking:
             self.parent().notify("Pomodoro", f"Terminaste: {self.session_name()}.")
-            if self.cycle >= self.cycles.value(): self.label.setText("¡Pomodoro completado!"); self.start_button.setText("Iniciar nuevamente"); return
+            if self.cycle >= self.cycles.value():
+                self.db.record_pomodoro(self.session_name(), self.task.currentData(), self.work.value(), self.rest.value(), self.cycles.value())
+                self.label.setText("¡Pomodoro completado!"); self.start_button.setText("Iniciar nuevamente"); return
             self.breaking = True; self.begin_phase(); return
         self.breaking = False; self.cycle += 1; self.parent().notify("Pomodoro", "Descanso terminado. Comienza el siguiente ciclo."); self.begin_phase()
 
@@ -289,6 +303,8 @@ class MainWindow(QMainWindow):
           QPushButton#navButton:hover { background:#efe1fa; }
           QPushButton#todayButton { color:#ffffff; background:#8f51dc; }
           QPushButton#todayButton:hover { background:#7d40c7; }
+          QPushButton#fab { color:#ffffff; background:#9e62e6; font-size:30px; min-width:58px; min-height:58px; border-radius:16px; padding:0; }
+          QPushButton#fab:hover { background:#8447d2; }
           QCheckBox { color:#1f1a24; font-size:15px; font-weight:650; }
           QCheckBox::indicator { width:20px; height:20px; border:2px solid #aa74e7; border-radius:6px; background:#ffffff; }
           QCheckBox::indicator:checked { background:#9e62e6; border-color:#9e62e6; }
@@ -310,13 +326,13 @@ class MainWindow(QMainWindow):
         page = QWidget(); page.setObjectName("home"); outer = QVBoxLayout(page); outer.setContentsMargins(0, 0, 0, 0); outer.setSpacing(0)
         header = QFrame(); header.setObjectName("hero"); header.setFixedHeight(230); head = QVBoxLayout(header); head.setContentsMargins(32, 24, 32, 22)
         top = QHBoxLayout(); menu = QPushButton("🎨"); menu.setObjectName("headerIcon"); menu.setToolTip("Apariencia y avisos"); menu.clicked.connect(self.show_appearance_menu); self.day_label = QLabel(); self.day_label.setObjectName("date"); clock = QPushButton("◴"); clock.setObjectName("headerIcon"); clock.clicked.connect(self.show_history); top.addWidget(menu); top.addStretch(); top.addWidget(self.day_label); top.addStretch(); top.addWidget(clock); head.addLayout(top); head.addStretch()
-        row = QHBoxLayout(); words = QVBoxLayout(); title = QLabel("Hoy"); title.setObjectName("heading"); self.subtitle = QLabel(); self.subtitle.setObjectName("subheading"); words.addWidget(title); words.addWidget(self.subtitle); row.addLayout(words); row.addStretch(); add = QPushButton("Agregar tarea"); add.setObjectName("addWhite"); add.clicked.connect(self.add_task); row.addWidget(add); head.addLayout(row); outer.addWidget(header)
+        row = QHBoxLayout(); words = QVBoxLayout(); title = QLabel("Hoy"); title.setObjectName("heading"); self.subtitle = QLabel(); self.subtitle.setObjectName("subheading"); words.addWidget(title); words.addWidget(self.subtitle); row.addLayout(words); row.addStretch(); head.addLayout(row); outer.addWidget(header)
         content = QFrame(); content.setObjectName("content"); content.setStyleSheet("QFrame#content { background:#ffffff; border-top-left-radius:26px; border-top-right-radius:26px; }"); layout = QVBoxLayout(content); layout.setContentsMargins(30, 20, 30, 18); layout.setSpacing(16)
         self.quick_days = QHBoxLayout(); self.quick_days.setSpacing(12); layout.addLayout(self.quick_days)
         label = QLabel("Mis tareas"); label.setStyleSheet("font-size:24px; font-weight:800; color:#1f1a24;"); layout.addWidget(label)
         self.summary = QLabel(); self.summary.setObjectName("summary"); layout.addWidget(self.summary)
         self.scroll = QScrollArea(); self.scroll.setWidgetResizable(True); self.scroll.setFrameShape(QFrame.NoFrame); self.list_widget = QWidget(); self.list_layout = QVBoxLayout(self.list_widget); self.list_layout.setAlignment(Qt.AlignTop); self.list_layout.setSpacing(10); self.scroll.setWidget(self.list_widget); layout.addWidget(self.scroll)
-        bottom = QHBoxLayout(); calendar = QPushButton("Calendario"); calendar.setObjectName("secondaryButton"); calendar.clicked.connect(lambda: self.pages.setCurrentIndex(3)); bottom.addWidget(calendar); pomodoro = QPushButton("Pomodoro"); pomodoro.setObjectName("secondaryButton"); pomodoro.clicked.connect(self.open_pomodoro); bottom.addWidget(pomodoro); bottom.addStretch(); history = QPushButton("Historial"); history.setObjectName("secondaryButton"); history.clicked.connect(self.show_history); bottom.addWidget(history); layout.addLayout(bottom); outer.addWidget(content); return page
+        bottom = QHBoxLayout(); calendar = QPushButton("Calendario"); calendar.setObjectName("secondaryButton"); calendar.clicked.connect(lambda: self.pages.setCurrentIndex(3)); bottom.addWidget(calendar); pomodoro = QPushButton("Pomodoro"); pomodoro.setObjectName("secondaryButton"); pomodoro.clicked.connect(self.open_pomodoro); bottom.addWidget(pomodoro); bottom.addStretch(); history = QPushButton("Historial"); history.setObjectName("secondaryButton"); history.clicked.connect(self.show_history); bottom.addWidget(history); add = QPushButton("+"); add.setObjectName("fab"); add.setToolTip("Crear tarea"); add.clicked.connect(self.add_task); bottom.addWidget(add); layout.addLayout(bottom); outer.addWidget(content); return page
 
     def build_categories_page(self):
         page = QWidget(); layout = QVBoxLayout(page); layout.setContentsMargins(30, 28, 30, 25); layout.setSpacing(14)
@@ -329,6 +345,7 @@ class MainWindow(QMainWindow):
     def build_form_page(self):
         page = QWidget(); layout = QVBoxLayout(page); layout.setContentsMargins(30, 28, 30, 25); layout.setSpacing(11)
         top = QHBoxLayout(); back = QPushButton("‹"); back.setObjectName("navButton"); back.clicked.connect(lambda: self.pages.setCurrentIndex(1)); top.addWidget(back); top.addStretch(); self.form_title = QLabel("Crear tarea"); self.form_title.setStyleSheet("font-size:25px;font-weight:800;"); top.addWidget(self.form_title); top.addStretch(); layout.addLayout(top)
+        self.form_calendar = QCalendarWidget(); self.form_calendar.setGridVisible(False); self.form_calendar.setVerticalHeaderFormat(QCalendarWidget.NoVerticalHeader); self.form_calendar.setFixedHeight(185); self.form_calendar.selectionChanged.connect(self.form_calendar_selected); layout.addWidget(self.form_calendar)
         self.form_category = QLabel(); self.form_category.setStyleSheet("background:#f0e2fa;color:#7548a9;font-size:18px;font-weight:800;border-radius:12px;padding:15px;"); layout.addWidget(self.form_category)
         self.form_name = QLineEdit(); self.form_name.setPlaceholderText("Nombre de la tarea"); layout.addWidget(self.form_name)
         self.form_description = QPlainTextEdit(); self.form_description.setPlaceholderText("Descripción (opcional)"); self.form_description.setFixedHeight(72); layout.addWidget(self.form_description)
@@ -398,13 +415,15 @@ class MainWindow(QMainWindow):
     def go_today(self): self.current_day = date.today(); self.refresh()
     def calendar_selected(self):
         self.select_day(self.calendar.selectedDate().toPython()); self.pages.setCurrentIndex(0)
+    def form_calendar_selected(self):
+        self.form_start.setDate(self.form_calendar.selectedDate())
     def add_task(self): self.pages.setCurrentIndex(1)
     def open_form(self, category, task=None):
         self.editing_task = task; self.selected_category = category
         self.form_title.setText("Editar tarea" if task else "Crear tarea"); self.form_category.setText(f"{CATEGORY_ICONS[category]}  {category}")
         source = task or {}; current = self.current_day if not task else date.fromisoformat(task["start_date"])
         self.form_name.setText(source["title"] if task else ""); self.form_description.setPlainText(source["description"] if task else "")
-        self.form_start.setDate(QDate(current.year,current.month,current.day)); has_end=bool(task and task["end_date"]); self.form_has_end.setChecked(has_end); end=date.fromisoformat(task["end_date"]) if has_end else current; self.form_end.setDate(QDate(end.year,end.month,end.day)); self.form_end.setEnabled(has_end)
+        selected_date = QDate(current.year,current.month,current.day); self.form_start.setDate(selected_date); self.form_calendar.setSelectedDate(selected_date); has_end=bool(task and task["end_date"]); self.form_has_end.setChecked(has_end); end=date.fromisoformat(task["end_date"]) if has_end else current; self.form_end.setDate(QDate(end.year,end.month,end.day)); self.form_end.setEnabled(has_end)
         has_time=bool(task and task["start_time"]); self.form_has_time.setChecked(has_time); self.form_start_time.setEnabled(has_time); self.form_end_time.setEnabled(has_time)
         if has_time: self.form_start_time.setTime(QTime.fromString(task["start_time"],"HH:mm")); self.form_end_time.setTime(QTime.fromString(task["end_time"],"HH:mm"))
         chosen=task["weekdays"].split(",") if task else []
