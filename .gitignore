@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+build/
+dist/
+data/
+*.spec
+pip-install*.log
+.venv/
+.env
+*.db
